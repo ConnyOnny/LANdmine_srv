@@ -8,7 +8,9 @@ public class Game {
 	public static final int MINE_SCORE = -1000; // your "score" for "exploring" a mine
 	public static final int EXPLORE_SCORE = 25; // you get this for every explored non-mine
 	public static final int DANGER_SCORE = 50; // you explore a field with number n -> you get n times this score
-	
+
+	int fieldsLeft;
+
 	protected class Field {
 		public int minesAround;
 		public boolean isMine;
@@ -32,8 +34,11 @@ public class Game {
 				assert fst >= '0' && fst <= '8';
 				minesAround = fst - '0';
 			}
-			if (str.length() > 1)
-				explorer = explorers.get(str.substring(1));
+			if (str.length() > 1) {
+				synchronized (explorers) {
+					explorer = explorers.get(str.substring(1));
+				}
+			}
 		}
 		@Override
 		public String toString() {
@@ -49,10 +54,10 @@ public class Game {
 	Map<String,Object> explorers;
 	
 	public Game(int width, int height, int mineCount, Map<String,Object> explorers) {
-		if (width * height < mineCount) {
-			throw new IllegalArgumentException("too many mines on too small game field");
+		if (width * height < mineCount * 3) {
+			throw new IllegalArgumentException("1/3 of fields can be mines at max");
 		}
-		if (width > 32 || height > 32) {
+		if (width > 64 || height > 64) {
 			throw new IllegalArgumentException("too big game field");
 		}
 		this.board = new Field[width][height];
@@ -60,6 +65,7 @@ public class Game {
 		this.height = height;
 		this.mineCount = mineCount;
 		this.explorers = explorers;
+		this.fieldsLeft = width*height-mineCount;
 		ArrayList<Field> fieldList = new ArrayList<Field>();
 		for (int row = 0; row < height; row++) {
 			for (int col = 0; col < width; col++) {
@@ -88,21 +94,25 @@ public class Game {
 			}
 		}
 	}
-	protected synchronized boolean isMine(int col, int row) {
-		return col >= 0 && row >= 0 && col < width && row < height && board[col][row].isMine; 
-	}
-	boolean isExplored (int col, int row) {
-		return col >= 0 && row >= 0 && col < width && row < height && board[col][row].explorer != null;
-	}
 	public static Game fromString (String string, Map<String,Object> explorers) {
 		String[] infos = string.split(" ");
-		if (infos.length != 3)
-			throw new IllegalArgumentException("NO: new game takes exactly 3 parameters: width, height and mine count");
+		if (infos.length != 3 && infos.length != 2)
+			throw new IllegalArgumentException("NO: new game takes 2 or 3 parameters: width, height and optionally mine count");
 		// NumberFormatException is an IllegalArgumentException
 		int width = Integer.parseInt(infos[0]);
 		int height = Integer.parseInt(infos[1]);
-		int mineCount = Integer.parseInt(infos[2]);
+		int mineCount;
+		if (infos.length > 2)
+			mineCount = Integer.parseInt(infos[2]);
+		else
+			mineCount = width*height/5; // 20% mines
 		return new Game (width, height, mineCount, explorers);
+	}
+	protected synchronized boolean isMine(int col, int row) {
+		return col >= 0 && col < width && row >= 0 && row < height && board[col][row].isMine; 
+	}
+	boolean isExplored (int col, int row) {
+		return col >= 0 && col < width && row >= 0 && row < height && board[col][row].explorer != null;
 	}
 	@Override
 	public synchronized String toString() {
@@ -124,6 +134,9 @@ public class Game {
 		try {
 			int score = getScore(col,row);
 			if (board[col][row].explorer == null) {
+				if (!board[col][row].isMine) {
+					fieldsLeft--;
+				}
 				board[col][row].explorer = who;
 			}
 			if (score != 0)
@@ -164,13 +177,6 @@ public class Game {
 		}
 	}
 	public boolean isGameOver () {
-		//TODO: make this more efficient by counting on exploration
-		for (Field[] fa : board) {
-			for (Field f : fa) {
-				if (f.explorer==null && !f.isMine)
-					return false;
-			}
-		}
-		return true;
+		return fieldsLeft == 0;
 	}
 }

@@ -14,6 +14,7 @@ public class Server extends WebSocketServer {
 	final Map<String,Object> clients;
 	final Map<WebSocket,ClientInfo> sock2client;
 	Game game;
+	ClientInfo admin;
 	
 	public static void main(String[] args) {
 		if (args.length != 1) {
@@ -40,11 +41,20 @@ public class Server extends WebSocketServer {
 			newClient.send("YOU"+newClient.toString());
 			if (game != null)
 				newClient.send('G'+game.toString());
-			for (Object o : clients.values()) {
-				ClientInfo c = (ClientInfo) o;
-				newClient.send("PL"+c.toString()+" "+c.score);
-				if (c.nick != null)
-					newClient.send("PN"+c.toString()+" "+c.nick);
+			synchronized (clients) {
+				if (clients.isEmpty()) {
+					admin = newClient;
+					newClient.send("A"+admin);
+					System.out.println("New admin: "+admin);
+				} else {
+					for (Object o : clients.values()) {
+						ClientInfo c = (ClientInfo) o;
+						newClient.send("PL"+c.toString()+" "+c.score);
+						if (c.nick != null)
+							newClient.send("PN"+c.toString()+" "+c.nick);
+					}
+					newClient.send("A"+admin);
+				}
 			}
 		} catch (Exception e) {
 			e.printStackTrace(System.out);
@@ -65,8 +75,18 @@ public class Server extends WebSocketServer {
 		ClientInfo leaver = sock2client.get(conn);
 		System.out.println("Client "+leaver+" aka "+leaver.getNick()+ " is leaving.");
 		synchronized (clients) {
-			assert clients.remove(leaver.toString()) != null;
-			assert sock2client.remove(conn) != null;
+			clients.remove(leaver.toString());
+			sock2client.remove(conn);
+			if (leaver == admin) {
+				if (clients.isEmpty()) {
+					admin = null;
+					System.out.println("nobody is left, so admin is now null");
+				} else {
+					admin = (ClientInfo) clients.values().iterator().next();
+					System.out.println("The leaver was admin. The new admin is "+admin+" aka "+admin.getNick());
+					broadcast ("A"+admin);
+				}
+			}
 		}
 		broadcast("PO"+leaver);
 	}
@@ -110,7 +130,7 @@ public class Server extends WebSocketServer {
 			break;
 		case 'G': // new game cols rows minecount
 			synchronized (this) {
-				if (game == null || game.isGameOver()) {
+				if (game == null || game.isGameOver() || who==admin) {
 					System.out.println("Starting new game: "+what);
 					try {
 						game = Game.fromString(what.substring(1),clients);
@@ -145,6 +165,9 @@ public class Server extends WebSocketServer {
 					who.sendUnsafe(result);
 				} else {
 					broadcast(result);
+					if (game.isGameOver()) {
+						broadcast ("OVER");
+					}
 				}
 				// print scores
 				/*System.out.println("Scores:");
