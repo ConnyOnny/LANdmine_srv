@@ -60,6 +60,8 @@ public class Game {
 		if (width > 64 || height > 64) {
 			throw new IllegalArgumentException("too big game field");
 		}
+		if (width < 1 || height < 1 || mineCount < 0)
+			throw new IllegalArgumentException("min: 1x1 with 0 mines");
 		this.board = new Field[width][height];
 		this.width = width;
 		this.height = height;

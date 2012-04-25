@@ -15,7 +15,7 @@ public class Server extends WebSocketServer {
 	final Map<WebSocket,ClientInfo> sock2client;
 	Game game;
 	ClientInfo admin;
-	
+
 	public static void main(String[] args) {
 		if (args.length != 1) {
 			System.err.println("Please specify exactly one parameter: the port where to listen.");
@@ -25,7 +25,7 @@ public class Server extends WebSocketServer {
 		Server srv = new Server (new InetSocketAddress(port));
 		srv.start();
 	}
-	
+
 	public Server(InetSocketAddress address) {
 		super(address);
 		currentID = new AtomicLong();
@@ -35,26 +35,25 @@ public class Server extends WebSocketServer {
 	}
 
 	@Override
-	public void onOpen(WebSocket conn, ClientHandshake handshake) {
+	public synchronized void onOpen(WebSocket conn, ClientHandshake handshake) {
 		ClientInfo newClient = new ClientInfo(conn, getNewID());
 		try {
 			newClient.send("YOU"+newClient.toString());
 			if (game != null)
 				newClient.send('G'+game.toString());
-			synchronized (clients) {
-				if (clients.isEmpty()) {
-					admin = newClient;
-					newClient.send("A"+admin);
-					System.out.println("New admin: "+admin);
-				} else {
-					for (Object o : clients.values()) {
-						ClientInfo c = (ClientInfo) o;
-						newClient.send("PL"+c.toString()+" "+c.score);
-						if (c.nick != null)
-							newClient.send("PN"+c.toString()+" "+c.nick);
-					}
-					newClient.send("A"+admin);
+			if (clients.isEmpty()) {
+				admin = newClient;
+				newClient.send("A"+admin);
+				System.out.println("New admin: "+admin);
+			} else {
+				for (Object o : clients.values()) {
+					ClientInfo c = (ClientInfo) o;
+					newClient.send("PL"+c.toString()+" "+c.score);
+					if (c.nick != null)
+						newClient.send("PN"+c.toString()+" "+c.nick);
 				}
+				newClient.send("A"+admin);
+
 			}
 		} catch (Exception e) {
 			e.printStackTrace(System.out);
@@ -63,52 +62,48 @@ public class Server extends WebSocketServer {
 			return;
 		}
 		broadcast ("PL"+newClient.toString()+" 0");
-		synchronized (clients) {
-			clients.put(newClient.toString(), newClient);
-			sock2client.put(conn, newClient);
-		}
+		clients.put(newClient.toString(), newClient);
+		sock2client.put(conn, newClient);
 		System.out.println("Client "+newClient+" successfully connected");
 	}
 
 	@Override
-	public void onClose(WebSocket conn, int code, String reason, boolean remote) {
+	public synchronized void onClose(WebSocket conn, int code, String reason, boolean remote) {
 		ClientInfo leaver = sock2client.get(conn);
 		System.out.println("Client "+leaver+" aka "+leaver.getNick()+ " is leaving.");
-		synchronized (clients) {
-			clients.remove(leaver.toString());
-			sock2client.remove(conn);
-			if (leaver == admin) {
-				if (clients.isEmpty()) {
-					admin = null;
-					System.out.println("nobody is left, so admin is now null");
-				} else {
-					admin = (ClientInfo) clients.values().iterator().next();
-					System.out.println("The leaver was admin. The new admin is "+admin+" aka "+admin.getNick());
-					broadcast ("A"+admin);
-				}
+
+		clients.remove(leaver.toString());
+		sock2client.remove(conn);
+		if (leaver == admin) {
+			if (clients.isEmpty()) {
+				admin = null;
+				System.out.println("nobody is left, so admin is now null");
+			} else {
+				admin = (ClientInfo) clients.values().iterator().next();
+				System.out.println("The leaver was admin. The new admin is "+admin+" aka "+admin.getNick());
+				broadcast ("A"+admin);
 			}
 		}
+
 		broadcast("PO"+leaver);
 	}
 
 	@Override
-	public void onMessage(WebSocket conn, String message) {
+	public synchronized void onMessage(WebSocket conn, String message) {
 		try {
 			onMessageUnsafe(conn, message);
 		} catch (Exception e) {
 			System.out.println("EXCEPTION in onMessageUnsafe!");
 			e.printStackTrace(System.out);
-			synchronized (clients) {
-				if (sock2client.containsKey(conn)) {
-					ClientInfo cl = sock2client.get(conn);
-					sock2client.remove(conn);
-					clients.remove(cl.toString());
-				}
+			if (sock2client.containsKey(conn)) {
+				ClientInfo cl = sock2client.get(conn);
+				sock2client.remove(conn);
+				clients.remove(cl.toString());
 			}
 			conn.close(500);
 		}
 	}
-	
+
 	public void onMessageUnsafe(WebSocket conn, String what) {
 		ClientInfo who = sock2client.get(conn);
 		if (what.isEmpty()) {
@@ -129,20 +124,18 @@ public class Server extends WebSocketServer {
 			broadcast ('M'+(who.nick==null ? "player"+who.player_id : who.nick) + ": " + what.substring(1));
 			break;
 		case 'G': // new game cols rows minecount
-			synchronized (this) {
-				if (game == null || game.isGameOver() || who==admin) {
-					System.out.println("Starting new game: "+what);
-					try {
-						game = Game.fromString(what.substring(1),clients);
-						broadcast ('G'+game.toString());
-					} catch (IllegalArgumentException e) {
-						who.sendUnsafe("NO: "+e.getMessage());
-						System.out.println("Didn't start game because: "+e.getMessage());
-					}
-				} else {
-					System.out.println(who+" tried creating a game while a game was already there.");
-					who.sendUnsafe("NO: There is already a game running");
+			if (game == null || game.isGameOver() || who==admin) {
+				System.out.println("Starting new game: "+what);
+				try {
+					game = Game.fromString(what.substring(1),clients);
+					broadcast ('G'+game.toString());
+				} catch (IllegalArgumentException e) {
+					who.sendUnsafe("NO: "+e.getMessage());
+					System.out.println("Didn't start game because: "+e.getMessage());
 				}
+			} else {
+				System.out.println(who+" tried creating a game while a game was already there.");
+				who.sendUnsafe("NO: There is already a game running");
 			}
 			break;
 		case 'C': // click col row
@@ -192,13 +185,11 @@ public class Server extends WebSocketServer {
 					who.sendUnsafe("NO: no newline or \": \" allowed in nickname");
 					return;
 				}
-				synchronized (clients) {
-					for (Object o : clients.values()) {
-						ClientInfo c = (ClientInfo) o;
-						if (newnick.equalsIgnoreCase(c.nick)) {
-							who.sendUnsafe("NO: this nick was already taken by player "+c.toString());
-							return;
-						}
+				for (Object o : clients.values()) {
+					ClientInfo c = (ClientInfo) o;
+					if (newnick.equalsIgnoreCase(c.nick)) {
+						who.sendUnsafe("NO: this nick was already taken by player "+c.toString());
+						return;
 					}
 				}
 				who.nick = newnick;
@@ -214,31 +205,29 @@ public class Server extends WebSocketServer {
 	}
 
 	@Override
-	public void onError(WebSocket conn, Exception ex) {
+	public synchronized void onError(WebSocket conn, Exception ex) {
 		System.out.println("ERROR!!!");
 	}
 
 	void broadcast (String msg) {
-		synchronized (clients) {
-			for (Object clo : clients.values()) {
-				ClientInfo cl = (ClientInfo) clo;
-				try {
-					cl.send(msg);
-				} catch (NotYetConnectedException e) {
-					e.printStackTrace();
-					System.out.println("client "+cl+" aka "+cl.getNick()+" was not connected yet (wtf?!)");
-				} catch (IllegalArgumentException e) {
-					e.printStackTrace();
-					System.out.println("somehow the string \""+msg+"\" was not okay for client "+cl+" aka "+cl.getNick());
-				} catch (InterruptedException e) {
-					e.printStackTrace();
-					System.out.println("interrupted, so let's suicide");
-					System.exit(1);
-				}
+		for (Object clo : clients.values()) {
+			ClientInfo cl = (ClientInfo) clo;
+			try {
+				cl.send(msg);
+			} catch (NotYetConnectedException e) {
+				e.printStackTrace();
+				System.out.println("client "+cl+" aka "+cl.getNick()+" was not connected yet (wtf?!)");
+			} catch (IllegalArgumentException e) {
+				e.printStackTrace();
+				System.out.println("somehow the string \""+msg+"\" was not okay for client "+cl+" aka "+cl.getNick());
+			} catch (InterruptedException e) {
+				e.printStackTrace();
+				System.out.println("interrupted, so let's suicide");
+				System.exit(1);
 			}
 		}
 	}
-	
+
 	private AtomicLong currentID;
 	public long getNewID () {
 		return currentID.incrementAndGet();
