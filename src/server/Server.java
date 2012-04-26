@@ -126,6 +126,9 @@ public class Server extends WebSocketServer {
 		case 'G': // new game cols rows minecount
 			if (game == null || game.isGameOver() || who==admin) {
 				System.out.println("Starting new game: "+what);
+				for (ClientInfo cl : sock2client.values()) {
+					cl.score = 0;
+				}
 				try {
 					game = Game.fromString(what.substring(1),clients);
 					broadcast ('G'+game.toString());
